@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Journal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; }
+    .chart-container { width: 100%; height: 300px; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body class="bg-slate-900">
+  <div id="root"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.min.js"></script>
+
+  <script>
+    const { useState, useEffect } = React;
+
+    // Iconos SVG simples
+    const Icon = ({ type, size = 24 }) => {
+      const icons = {
+        plus: '<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>',
+        trash: '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"></path>',
+        edit: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>',
+        upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line>',
+        dollar: '<line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>',
+        alert: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>'
+      };
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${icons[type] || ''}</svg>`;
+    };
+
+    const TradingJournal = () => {
+      const [trades, setTrades] = useState(() => {
+        try {
+          const saved = localStorage.getItem('tradingJournal');
+          return saved ? JSON.parse(saved) : [];
+        } catch {
+          return [];
+        }
+      });
+      
+      const [showForm, setShowForm] = useState(false);
+      const [editingId, setEditingId] = useState(null);
+      const [filterSymbol, setFilterSymbol] = useState('all');
+      const [importMessage, setImportMessage] = useState('');
+      
+      const [formData, setFormData] = useState({
+        date: new Date().toISOString().split('T')[0],
+        symbol: '',
+        type: 'long',
+        entryPrice: '',
+        exitPrice: '',
+        quantity: '',
+        commission: 0,
+        fees: 0,
+        setup: '',
+        emotion: 5,
+        notes: ''
+      });
+
+      useEffect(() => {
+        localStorage.setItem('tradingJournal', JSON.stringify(trades));
+      }, [trades]);
+
+      const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        const numFields = ['emotion', 'quantity', 'entryPrice', 'exitPrice', 'commission', 'fees'];
+        setFormData(prev => ({
+          ...prev,
+          [name]: numFields.includes(name) ? (parseFloat(value) || '') : value
+        }));
+      };
+
+      const calculatePnL = (entry, exit, qty, type, commission = 0, fees = 0) => {
+        if (!entry || !exit || !qty) return 0;
+        const diff = type === 'long' ? exit - entry : entry - exit;
+        const grossPnL = diff * qty;
+        return grossPnL - commission - fees;
+      };
+
+      const handleAddTrade = () => {
+        if (!formData.symbol || !formData.entryPrice || !formData.exitPrice || !formData.quantity) {
+          alert('Por favor completa los campos obligatorios');
+          return;
+        }
+
+        const commission = parseFloat(formData.commission) || 0;
+        const fees = parseFloat(formData.fees) || 0;
+        const pnl = calculatePnL(formData.entryPrice, formData.exitPrice, formData.quantity, formData.type, commission, fees);
+
+        if (editingId) {
+          setTrades(trades.map(t => t.id === editingId ? {
+            ...formData,
+            id: editingId,
+            pnl,
+            commission,
+            fees
+          } : t));
+          setEditingId(null);
+        } else {
+          setTrades([...trades, {
+            ...formData,
+            id: Date.now(),
+            pnl,
+            commission,
+            fees
+          }]);
+        }
+
+        setFormData({
+          date: new Date().toISOString().split('T')[0],
+          symbol: '',
+          type: 'long',
+          entryPrice: '',
+          exitPrice: '',
+          quantity: '',
+          commission: 0,
+          fees: 0,
+          setup: '',
+          emotion: 5,
+          notes: ''
+        });
+        setShowForm(false);
+      };
+
+      const handleEdit = (trade) => {
+        setFormData({
+          date: trade.date,
+          symbol: trade.symbol,
+          type: trade.type,
+          entryPrice: trade.entryPrice,
+          exitPrice: trade.exitPrice,
+          quantity: trade.quantity,
+          commission: trade.commission || 0,
+          fees: trade.fees || 0,
+          setup: trade.setup,
+          emotion: trade.emotion,
+          notes: trade.notes
+        });
+        setEditingId(trade.id);
+        setShowForm(true);
+      };
+
+      const handleDelete = (id) => {
+        if (confirm('¿Eliminar este trade?')) {
+          setTrades(trades.filter(t => t.id !== id));
+        }
+      };
+
+      const handleImportExcel = (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const workbook = XLSX.read(e.target?.result, { type: 'binary' });
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+            if (jsonData.length === 0) {
+              setImportMessage('El archivo está vacío');
+              return;
+            }
+
+            const importedTrades = jsonData.map(row => {
+              const symbol = String(row.symbol || row.Symbol || '').toUpperCase().trim();
+              const type = String(row.type || row.Type || 'long').toLowerCase().trim();
+              const entryPrice = parseFloat(row.entryPrice || row['Entry Price'] || 0);
+              const exitPrice = parseFloat(row.exitPrice || row['Exit Price'] || 0);
+              const quantity = parseFloat(row.quantity || row.Quantity || 0);
+              const commission = parseFloat(row.commission || row.Commission || 0);
+              const fees = parseFloat(row.fees || row.Fees || 0);
+              const date = String(row.date || row.Date || new Date().toISOString().split('T')[0]).substring(0, 10);
+
+              if (!symbol || !entryPrice || !exitPrice || !quantity) {
+                throw new Error('Columnas incompletas');
+              }
+
+              const pnl = calculatePnL(entryPrice, exitPrice, quantity, type, commission, fees);
+
+              return {
+                id: Date.now() + Math.random(),
+                date,
+                symbol,
+                type: ['long', 'short'].includes(type) ? type : 'long',
+                entryPrice,
+                exitPrice,
+                quantity,
+                commission,
+                fees,
+                setup: String(row.setup || row.Setup || '').trim(),
+                emotion: parseFloat(row.emotion || 5),
+                notes: String(row.notes || row.Notes || '').trim(),
+                pnl
+              };
+            });
+
+            setTrades(prev => [...prev, ...importedTrades]);
+            setImportMessage(`✓ ${importedTrades.length} trades importados`);
+            setTimeout(() => setImportMessage(''), 4000);
+          } catch (err) {
+            setImportMessage(`Error: ${err.message}`);
+          }
+          event.target.value = '';
+        };
+        reader.readAsBinaryString(file);
+      };
+
+      const handleExportExcel = () => {
+        const exportData = trades.map(({ id, ...rest }) => rest);
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Trades');
+        XLSX.writeFile(wb, `trading_journal_${new Date().toISOString().split('T')[0]}.xlsx`);
+      };
+
+      const filteredTrades = trades.filter(t => filterSymbol === 'all' || t.symbol === filterSymbol);
+
+      const stats = {
+        totalTrades: filteredTrades.length,
+        winningTrades: filteredTrades.filter(t => t.pnl > 0).length,
+        losingTrades: filteredTrades.filter(t => t.pnl < 0).length,
+        totalPnL: filteredTrades.reduce((sum, t) => sum + t.pnl, 0),
+        winRate: filteredTrades.length > 0 ? (filteredTrades.filter(t => t.pnl > 0).length / filteredTrades.length * 100).toFixed(1) : 0,
+        avgWin: filteredTrades.filter(t => t.pnl > 0).length > 0 ? (filteredTrades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / filteredTrades.filter(t => t.pnl > 0).length).toFixed(2) : 0,
+        avgLoss: filteredTrades.filter(t => t.pnl < 0).length > 0 ? (filteredTrades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / filteredTrades.filter(t => t.pnl < 0).length).toFixed(2) : 0,
+      };
+
+      const totalGrossComm = filteredTrades.reduce((sum, t) => sum + (t.commission || 0), 0);
+      const totalGrossFees = filteredTrades.reduce((sum, t) => sum + (t.fees || 0), 0);
+      const uniqueSymbols = [...new Set(trades.map(t => t.symbol))];
+
+      return React.createElement('div', { className: 'min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900' },
+        // Header
+        React.createElement('div', { className: 'bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6 shadow-lg' },
+          React.createElement('div', { className: 'max-w-7xl mx-auto' },
+            React.createElement('div', { className: 'flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4' },
+              React.createElement('div', null,
+                React.createElement('h1', { className: 'text-3xl md:text-4xl font-bold' }, 'Trading Journal'),
+                React.createElement('p', { className: 'text-blue-100 mt-1' }, 'Track, analyze, and improve your trading')
+              ),
+              React.createElement('div', { className: 'flex gap-2 flex-wrap' },
+                React.createElement('button', {
+                  onClick: () => {
+                    setShowForm(!showForm);
+                    setEditingId(null);
+                    setFormData({
+                      date: new Date().toISOString().split('T')[0],
+                      symbol: '', type: 'long', entryPrice: '', exitPrice: '', quantity: '',
+                      commission: 0, fees: 0, setup: '', emotion: 5, notes: ''
+                    });
+                  },
+                  className: 'bg-white text-blue-600 px-4 py-2 md:px-6 md:py-3 rounded-lg font-semibold hover:bg-blue-50 transition text-sm md:text-base'
+                }, '+ Nuevo Trade'),
+                React.createElement('label', { className: 'cursor-pointer' },
+                  React.createElement('div', { className: 'bg-white text-blue-600 px-4 py-2 md:px-6 md:py-3 rounded-lg font-semibold hover:bg-blue-50 transition text-sm md:text-base' }, '⬆ Importar'),
+                  React.createElement('input', { type: 'file', accept: '.xlsx,.xls,.csv', onChange: handleImportExcel, className: 'hidden' })
+                ),
+                React.createElement('button', {
+                  onClick: handleExportExcel,
+                  className: 'bg-green-600 text-white px-4 py-2 md:px-6 md:py-3 rounded-lg font-semibold hover:bg-green-700 transition text-sm md:text-base'
+                }, '⬇ Descargar')
+              )
+            )
+          )
+        ),
+
+        // Mensaje
+        importMessage && React.createElement('div', { className: 'bg-green-500/20 border border-green-500 text-green-400 p-3 md:p-4' },
+          React.createElement('div', { className: 'max-w-7xl mx-auto' }, importMessage)
+        ),
+
+        // Formulario
+        showForm && React.createElement('div', { className: 'bg-slate-800 border-b border-slate-700 p-4 md:p-6' },
+          React.createElement('div', { className: 'max-w-7xl mx-auto' },
+            React.createElement('h2', { className: 'text-2xl font-bold text-white mb-4 md:mb-6' }, editingId ? 'Editar Trade' : 'Nuevo Trade'),
+            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6' },
+              ['date', 'symbol', 'type', 'entryPrice', 'exitPrice', 'quantity', 'commission', 'fees', 'setup', 'emotion'].map(field =>
+                React.createElement('div', { key: field },
+                  React.createElement('label', { className: 'block text-xs md:text-sm font-medium text-gray-300 mb-1 md:mb-2' },
+                    field === 'date' ? 'Fecha' : field === 'symbol' ? 'Símbolo' : field === 'type' ? 'Tipo' :
+                    field === 'entryPrice' ? 'Entrada' : field === 'exitPrice' ? 'Salida' : field === 'quantity' ? 'Qty' :
+                    field === 'commission' ? 'Comisión' : field === 'fees' ? 'Fees' : field === 'setup' ? 'Setup' : 'Confianza'
+                  ),
+                  field === 'type' ? 
+                    React.createElement('select', {
+                      name: field,
+                      value: formData[field],
+                      onChange: handleInputChange,
+                      className: 'w-full bg-slate-700 text-white px-3 py-2 rounded border border-slate-600 text-sm'
+                    },
+                      React.createElement('option', { value: 'long' }, 'Long'),
+                      React.createElement('option', { value: 'short' }, 'Short')
+                    ) :
+                    React.createElement('input', {
+                      type: field === 'date' ? 'date' : field === 'quantity' || field === 'emotion' ? 'number' : 'text',
+                      name: field,
+                      value: formData[field],
+                      onChange: handleInputChange,
+                      step: field === 'entryPrice' || field === 'exitPrice' ? '0.00001' : '0.01',
+                      min: field === 'emotion' ? '1' : undefined,
+                      max: field === 'emotion' ? '10' : undefined,
+                      className: 'w-full bg-slate-700 text-white px-3 py-2 rounded border border-slate-600 text-sm',
+                      placeholder: field === 'symbol' ? 'EUR/USD' : ''
+                    })
+                )
+              )
+            ),
+            React.createElement('div', { className: 'mb-4' },
+              React.createElement('label', { className: 'block text-xs md:text-sm font-medium text-gray-300 mb-1 md:mb-2' }, 'Notas'),
+              React.createElement('textarea', {
+                name: 'notes',
+                value: formData.notes,
+                onChange: handleInputChange,
+                className: 'w-full bg-slate-700 text-white px-3 py-2 rounded border border-slate-600 text-sm',
+                rows: '2'
+              })
+            ),
+            React.createElement('div', { className: 'flex gap-2 md:gap-3' },
+              React.createElement('button', {
+                onClick: handleAddTrade,
+                className: 'bg-blue-600 text-white px-4 md:px-8 py-2 rounded font-semibold hover:bg-blue-700 transition text-sm md:text-base'
+              }, editingId ? 'Actualizar' : 'Guardar'),
+              React.createElement('button', {
+                onClick: () => { setShowForm(false); setEditingId(null); },
+                className: 'bg-slate-700 text-white px-4 md:px-8 py-2 rounded font-semibold hover:bg-slate-600 transition text-sm md:text-base'
+              }, 'Cancelar')
+            )
+          )
+        ),
+
+        // Stats y contenido principal
+        React.createElement('div', { className: 'max-w-7xl mx-auto p-4 md:p-6' },
+          // Stats Cards
+          React.createElement('div', { className: 'grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 mb-6 md:mb-8' },
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('p', { className: 'text-gray-400 text-xs md:text-sm' }, 'Total P&L'),
+              React.createElement('p', { className: `text-2xl md:text-3xl font-bold mt-1 md:mt-2 ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}` },
+                `${stats.totalPnL > 0 ? '+' : ''}${stats.totalPnL.toFixed(2)}`
+              )
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('p', { className: 'text-gray-400 text-xs md:text-sm' }, 'Win Rate'),
+              React.createElement('p', { className: 'text-2xl md:text-3xl font-bold mt-1 md:mt-2 text-blue-400' }, `${stats.winRate}%`),
+              React.createElement('p', { className: 'text-xs text-gray-500 mt-1' }, `${stats.winningTrades}W / ${stats.losingTrades}L`)
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('p', { className: 'text-gray-400 text-xs md:text-sm' }, 'Trades'),
+              React.createElement('p', { className: 'text-2xl md:text-3xl font-bold mt-1 md:mt-2 text-purple-400' }, stats.totalTrades)
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('p', { className: 'text-gray-400 text-xs md:text-sm' }, 'Prom. Ganancia'),
+              React.createElement('p', { className: 'text-xl md:text-3xl font-bold mt-1 md:mt-2 text-green-400' }, `$${stats.avgWin}`)
+            )
+          ),
+
+          // Filtros
+          React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-4 border border-slate-700 mb-6 md:mb-8' },
+            React.createElement('select', {
+              value: filterSymbol,
+              onChange: (e) => setFilterSymbol(e.target.value),
+              className: 'bg-slate-700 text-white px-3 py-2 rounded border border-slate-600 text-xs md:text-sm'
+            },
+              React.createElement('option', { value: 'all' }, 'Todos los Símbolos'),
+              uniqueSymbols.map(s => React.createElement('option', { key: s, value: s }, s))
+            )
+          ),
+
+          // Tabla
+          React.createElement('div', { className: 'bg-slate-800 rounded-lg border border-slate-700 overflow-hidden mb-6 md:mb-8' },
+            React.createElement('div', { className: 'p-3 md:p-6 border-b border-slate-700' },
+              React.createElement('h3', { className: 'text-lg md:text-xl font-bold text-white' }, 'Historial')
+            ),
+            React.createElement('div', { className: 'overflow-x-auto' },
+              React.createElement('table', { className: 'w-full text-xs md:text-sm' },
+                React.createElement('thead', { className: 'bg-slate-700' },
+                  React.createElement('tr', null,
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Fecha'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Símbolo'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Tipo'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Entrada'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Salida'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Qty'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Com'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'P&L'),
+                    React.createElement('th', { className: 'px-2 md:px-6 py-2 md:py-3 text-left font-semibold text-gray-300' }, 'Acciones')
+                  )
+                ),
+                React.createElement('tbody', { className: 'divide-y divide-slate-700' },
+                  filteredTrades.length > 0 ?
+                    [...filteredTrades].reverse().map(trade =>
+                      React.createElement('tr', { key: trade.id, className: 'hover:bg-slate-700 transition' },
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 text-gray-300' }, trade.date),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 font-semibold text-white' }, trade.symbol),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4' },
+                          React.createElement('span', {
+                            className: `px-2 py-1 rounded text-xs font-semibold ${trade.type === 'long' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`
+                          }, trade.type.toUpperCase())
+                        ),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 text-gray-300 text-xs md:text-sm' }, trade.entryPrice.toFixed(5)),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 text-gray-300 text-xs md:text-sm' }, trade.exitPrice.toFixed(5)),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 text-gray-300' }, trade.quantity),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 text-red-400 text-xs md:text-sm' }, `-${(trade.commission || 0).toFixed(2)}`),
+                        React.createElement('td', {
+                          className: `px-2 md:px-6 py-2 md:py-4 font-semibold text-xs md:text-sm ${trade.pnl > 0 ? 'text-green-400' : trade.pnl < 0 ? 'text-red-400' : 'text-gray-300'}`
+                        }, `${trade.pnl > 0 ? '+' : ''}${trade.pnl.toFixed(2)}`),
+                        React.createElement('td', { className: 'px-2 md:px-6 py-2 md:py-4 flex gap-1 md:gap-2' },
+                          React.createElement('button', {
+                            onClick: () => handleEdit(trade),
+                            className: 'text-blue-400 hover:text-blue-300 transition'
+                          }, '✎'),
+                          React.createElement('button', {
+                            onClick: () => handleDelete(trade.id),
+                            className: 'text-red-400 hover:text-red-300 transition'
+                          }, '✕')
+                        )
+                      )
+                    ) :
+                    React.createElement('tr', null,
+                      React.createElement('td', { colSpan: '9', className: 'px-2 md:px-6 py-8 md:py-12 text-center text-gray-400' }, 'Sin trades')
+                    )
+                )
+              )
+            )
+          ),
+
+          // Stats finales
+          filteredTrades.length > 0 && React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6' },
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('h3', { className: 'text-white font-semibold mb-3 md:mb-4 text-sm md:text-base' }, 'P&L Bruto'),
+              React.createElement('p', { className: 'text-xl md:text-2xl font-bold text-green-400' },
+                `$${filteredTrades.reduce((sum, t) => sum + ((t.pnl || 0) + (t.commission || 0) + (t.fees || 0)), 0).toFixed(2)}`
+              )
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('h3', { className: 'text-white font-semibold mb-3 md:mb-4 text-sm md:text-base' }, 'Costos'),
+              React.createElement('p', { className: 'text-sm text-gray-300' }, `Comisiones: -$${totalGrossComm.toFixed(2)}`),
+              React.createElement('p', { className: 'text-sm text-gray-300' }, `Fees: -$${totalGrossFees.toFixed(2)}`),
+              React.createElement('p', { className: 'text-lg font-bold text-red-400 mt-2' }, `-$${(totalGrossComm + totalGrossFees).toFixed(2)}`)
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('h3', { className: 'text-white font-semibold mb-3 md:mb-4 text-sm md:text-base' }, 'P&L Neto'),
+              React.createElement('p', {
+                className: `text-2xl md:text-3xl font-bold ${stats.totalPnL > 0 ? 'text-green-400' : 'text-red-400'}`
+              }, `${stats.totalPnL > 0 ? '+' : ''}$${stats.totalPnL.toFixed(2)}`)
+            ),
+            React.createElement('div', { className: 'bg-slate-800 rounded-lg p-3 md:p-6 border border-slate-700' },
+              React.createElement('h3', { className: 'text-white font-semibold mb-3 md:mb-4 text-sm md:text-base' }, 'Stats'),
+              React.createElement('p', { className: 'text-xs md:text-sm text-gray-300' }, `Prom. Pérdida: $${stats.avgLoss}`),
+              React.createElement('p', { className: 'text-xs md:text-sm text-gray-300 mt-1' }, `Confianza: ${stats.totalTrades > 0 ? (trades.reduce((sum, t) => sum + t.emotion, 0) / trades.length).toFixed(1) : 0}/10`)
+            )
+          )
+        )
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(TradingJournal));
+  </script>
+</body>
+</html>
